@@ -1,0 +1,25 @@
+name: Sync Fork
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync fork with upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # Required for gh repo sync to push upstream changes
+    steps:
+      - name: Sync fork with upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh repo sync "$GITHUB_REPOSITORY"
