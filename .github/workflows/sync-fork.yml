@@ -25,5 +25,5 @@ jobs:
       - name: Pull upstream changes
         run: |
           git remote add upstream https://github.com/google/nsjail.git
-          git pull upstream master
+          git pull --no-rebase upstream master
           git push origin master
