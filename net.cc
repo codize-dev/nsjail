@@ -24,7 +24,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/prctl.h>
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
@@ -49,7 +48,11 @@
 #include <string>
 
 #include "logs.h"
+#include "macros.h"
 #include "util.h"
+
+#define STR_(x) #x
+#define STR(x) STR_(x)
 
 /* Embed pasta inside this binary */
 __asm__("\n"
@@ -58,7 +61,7 @@ __asm__("\n"
 	"   .local pasta_end\n"
 	"pasta_start:\n"
 #if defined(PASTA_BIN_PATH)
-	"   .incbin \"" PASTA_BIN_PATH "\"\n"
+	"   .incbin " STR(PASTA_BIN_PATH) "\n"
 #endif	// defined(PASTA_BIN_PATH)
 	"pasta_end:\n"
 	"\n");
@@ -70,8 +73,8 @@ static int getPastaFd() {
 	extern uint8_t* pasta_start;
 	extern uint8_t* pasta_end;
 	ptrdiff_t len = (uintptr_t)&pasta_end - (uintptr_t)&pasta_start;
-	if (len <= 8) { /* Some reasonably safe value accounting for alignment */
-		LOG_D("'pasta' is not embedded in this file");
+	if (len <= 16) { /* Some reasonably safe value accounting for alignment */
+		LOG_D("'pasta' is not embedded in this file, len=%td (<=16)", len);
 		return -1;
 	}
 
