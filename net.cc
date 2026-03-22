@@ -66,7 +66,7 @@ __asm__("\n"
 #endif	// defined(PASTA_BIN_PATH)
 	"pasta_end:\n"
 	"\n");
-// clang-format off
+// clang-format on
 
 static int getPastaFd() {
 #ifndef MFD_EXEC
@@ -225,94 +225,105 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
 		std::vector<const char*> argv;
 
 		argv.push_back("pasta");
-
-		bool ip4_enabled =
-		    !nsj->njc.user_net().ip().empty() || nsj->njc.user_net().enable_ip4_dhcp();
-		bool ip6_enabled = !nsj->njc.user_net().ip6().empty() ||
-				   nsj->njc.user_net().enable_ip6_dhcp() ||
-				   nsj->njc.user_net().enable_ip6_ra();
-
-		if (!nsj->njc.user_net().enable_ip4_dhcp()) {
-			argv.push_back("--no-dhcp");
-		}
-		if (!nsj->njc.user_net().enable_ip6_dhcp()) {
-			argv.push_back("--no-dhcpv6");
-		}
-		if (!nsj->njc.user_net().enable_ip6_ra()) {
-			argv.push_back("--no-ra");
-		}
-
-		if (!nsj->njc.user_net().enable_ip4_dhcp() &&
-		    !nsj->njc.user_net().enable_ip6_dhcp()) {
-			argv.push_back("--config-net");
-		}
-
 		argv.push_back("-f");
 		argv.push_back("-q");
 
-		if (!nsj->njc.user_net().tcp_ports().empty()) {
+		if (nsj->njc.user_net().ports_map_only()) {
+			argv.push_back("--splice-only");
+		} else {
+			bool ip4_enabled = !nsj->njc.user_net().ip().empty() ||
+					   nsj->njc.user_net().enable_ip4_dhcp();
+			bool ip6_enabled = !nsj->njc.user_net().ip6().empty() ||
+					   nsj->njc.user_net().enable_ip6_dhcp() ||
+					   nsj->njc.user_net().enable_ip6_ra();
+
+			if (!nsj->njc.user_net().enable_ip4_dhcp()) {
+				argv.push_back("--no-dhcp");
+			}
+			if (!nsj->njc.user_net().enable_ip6_dhcp()) {
+				argv.push_back("--no-dhcpv6");
+			}
+			if (!nsj->njc.user_net().enable_ip6_ra()) {
+				argv.push_back("--no-ra");
+			}
+
+			if (!nsj->njc.user_net().enable_ip4_dhcp() &&
+			    !nsj->njc.user_net().enable_ip6_dhcp()) {
+				argv.push_back("--config-net");
+			}
+
+			if (nsj->njc.user_net().enable_dns()) {
+				argv.push_back("--dhcp-dns");
+			}
+			if (!nsj->njc.user_net().dns_forward().empty()) {
+				argv.push_back("--dns-forward");
+				argv.push_back(nsj->njc.user_net().dns_forward().c_str());
+			}
+
+			if (!nsj->njc.user_net().enable_tcp()) {
+				argv.push_back("--no-tcp");
+			}
+			if (!nsj->njc.user_net().enable_udp()) {
+				argv.push_back("--no-udp");
+			}
+			if (!nsj->njc.user_net().enable_icmp()) {
+				argv.push_back("--no-icmp");
+			}
+			if (nsj->njc.user_net().no_map_gw()) {
+				argv.push_back("--no-map-gw");
+			}
+
+			if (!nsj->njc.user_net().ip().empty()) {
+				argv.push_back("-a");
+				argv.push_back(nsj->njc.user_net().ip().c_str());
+				if (!nsj->njc.user_net().mask().empty()) {
+					argv.push_back("-n");
+					argv.push_back(nsj->njc.user_net().mask().c_str());
+				}
+				if (!nsj->njc.user_net().gw().empty()) {
+					argv.push_back("-g");
+					argv.push_back(nsj->njc.user_net().gw().c_str());
+				}
+			}
+
+			if (!nsj->njc.user_net().ip6().empty()) {
+				argv.push_back("-a");
+				argv.push_back(nsj->njc.user_net().ip6().c_str());
+
+				if (!nsj->njc.user_net().gw6().empty()) {
+					argv.push_back("-g");
+					argv.push_back(nsj->njc.user_net().gw6().c_str());
+				}
+			}
+
+			if (!ip4_enabled) {
+				argv.push_back("-4");
+			}
+			if (!ip6_enabled) {
+				argv.push_back("-6");
+			}
+
+			if (!nsj->njc.user_net().ns_iface().empty()) {
+				argv.push_back("-I");
+				argv.push_back(nsj->njc.user_net().ns_iface().c_str());
+			}
+		}
+
+		if (!nsj->njc.user_net().tcp_map_in().empty()) {
 			argv.push_back("-t");
-			argv.push_back(nsj->njc.user_net().tcp_ports().c_str());
+			argv.push_back(nsj->njc.user_net().tcp_map_in().c_str());
 		}
-		if (!nsj->njc.user_net().udp_ports().empty()) {
+		if (!nsj->njc.user_net().udp_map_in().empty()) {
 			argv.push_back("-u");
-			argv.push_back(nsj->njc.user_net().udp_ports().c_str());
+			argv.push_back(nsj->njc.user_net().udp_map_in().c_str());
 		}
-
-		if (nsj->njc.user_net().enable_dns()) {
-			argv.push_back("--dhcp-dns");
+		if (!nsj->njc.user_net().tcp_map_out().empty()) {
+			argv.push_back("-T");
+			argv.push_back(nsj->njc.user_net().tcp_map_out().c_str());
 		}
-		if (!nsj->njc.user_net().dns_forward().empty()) {
-			argv.push_back("--dns-forward");
-			argv.push_back(nsj->njc.user_net().dns_forward().c_str());
-		}
-
-		if (!nsj->njc.user_net().enable_tcp()) {
-			argv.push_back("--no-tcp");
-		}
-		if (!nsj->njc.user_net().enable_udp()) {
-			argv.push_back("--no-udp");
-		}
-		if (!nsj->njc.user_net().enable_icmp()) {
-			argv.push_back("--no-icmp");
-		}
-		if (nsj->njc.user_net().no_map_gw()) {
-			argv.push_back("--no-map-gw");
-		}
-
-		if (!nsj->njc.user_net().ip().empty()) {
-			argv.push_back("-a");
-			argv.push_back(nsj->njc.user_net().ip().c_str());
-			if (!nsj->njc.user_net().mask().empty()) {
-				argv.push_back("-n");
-				argv.push_back(nsj->njc.user_net().mask().c_str());
-			}
-			if (!nsj->njc.user_net().gw().empty()) {
-				argv.push_back("-g");
-				argv.push_back(nsj->njc.user_net().gw().c_str());
-			}
-		}
-
-		if (!nsj->njc.user_net().ip6().empty()) {
-			argv.push_back("-a");
-			argv.push_back(nsj->njc.user_net().ip6().c_str());
-
-			if (!nsj->njc.user_net().gw6().empty()) {
-				argv.push_back("-g");
-				argv.push_back(nsj->njc.user_net().gw6().c_str());
-			}
-		}
-
-		if (!ip4_enabled) {
-			argv.push_back("-4");
-		}
-		if (!ip6_enabled) {
-			argv.push_back("-6");
-		}
-
-		if (!nsj->njc.user_net().ns_iface().empty()) {
-			argv.push_back("-I");
-			argv.push_back(nsj->njc.user_net().ns_iface().c_str());
+		if (!nsj->njc.user_net().udp_map_out().empty()) {
+			argv.push_back("-U");
+			argv.push_back(nsj->njc.user_net().udp_map_out().c_str());
 		}
 
 		argv.push_back(pid_str.c_str());
@@ -340,6 +351,11 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
 		}
 
 		int pasta_fd = getPastaFd();
+		const char* pasta_path = getenv("NSJAIL_PASTA_PATH");
+		if (pasta_path == NULL) {
+			pasta_path = argv[0];
+		}
+
 		util::makeRangeCOE(STDERR_FILENO + 1, ~0U);
 
 		/* LOG doesn't use STDERR_FILENO so it's fine to use it */
@@ -349,8 +365,9 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
 			    (uintptr_t)argv.data(), (uintptr_t)environ, AT_EMPTY_PATH);
 			err = errno;
 			PLOG_W("execveat(pasta_fd=%d, AT_EMPTY_PATH)", pasta_fd);
+
 		} else {
-			execvpe(argv[0], (char* const*)argv.data(), environ);
+			execvpe(pasta_path, (char* const*)argv.data(), environ);
 			err = errno;
 			PLOG_W("execvp('pasta')");
 		}
@@ -592,25 +609,28 @@ static bool ifaceUp(const char* ifacename) {
 		PLOG_E("socket(AF_INET, SOCK_STREAM, IPPROTO_IP)");
 		return false;
 	}
+	defer {
+		close(sock);
+	};
 
 	struct ifreq ifr = {};
 	snprintf(ifr.ifr_name, IF_NAMESIZE, "%s", ifacename);
 
 	if (ioctl(sock, SIOCGIFFLAGS, &ifr) == -1) {
 		PLOG_E("ioctl(iface='%s', SIOCGIFFLAGS, IFF_UP)", ifacename);
-		close(sock);
 		return false;
+	}
+	if ((ifr.ifr_flags & (IFF_UP | IFF_RUNNING)) == (IFF_UP | IFF_RUNNING)) {
+		return true;
 	}
 
 	ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
 
 	if (ioctl(sock, SIOCSIFFLAGS, &ifr) == -1) {
 		PLOG_E("ioctl(iface='%s', SIOCSIFFLAGS, IFF_UP|IFF_RUNNING)", ifacename);
-		close(sock);
 		return false;
 	}
 
-	close(sock);
 	return true;
 }
 
