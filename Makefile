@@ -154,8 +154,8 @@ test: $(BIN)
 	$(call run_test, ./nsjail -q -Mo --chroot / --user 99999 --group 99999 -- /bin/false, 1)
 	$(call run_test, ./nsjail --config tests/seccomp.cfg -q -t 2 -- /bin/bash -c 'strace -o /dev/null /bin/true || exit 77', 77)
 	$(call run_test, ./nsjail --config tests/basic.cfg -q -t 2 -- /bin/bash -c 'strace -o /dev/null /bin/true && exit 77', 77)
-	$(call run_test, ./nsjail --config tests/nat.cfg -q -t 3 -- /bin/bash -c 'sleep 0.2; ping -W 1 -c 1 8.8.8.8 && exit 77', 77)
-	$(call run_test, ./nsjail --config tests/port-mappings.cfg -q -t 3 -- /bin/bash -c 'sleep 0.2; { netstat -tan | grep LISTEN; } && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/pasta-nat.cfg -q -t 3 -- /bin/bash -c 'sleep 0.2; ping -W 1 -c 1 8.8.8.8 && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/pasta-port-mappings.cfg -q -t 3 -- /bin/bash -c 'sleep 0.2; { netstat -tan | grep LISTEN; } && exit 77', 77)
 
 	# --- Traffic rules tests ---
 	$(call run_test, ./nsjail --config tests/traffic-rules.cfg -q -t 1, 137)
@@ -245,14 +245,19 @@ subproc.o: macros.h net.h nstun/nstun.h sandbox.h user.h util.h
 uts.o: uts.h nsjail.h config.pb.h logs.h
 user.o: user.h nsjail.h config.pb.h logs.h macros.h subproc.h util.h
 util.o: util.h nsjail.h config.pb.h logs.h macros.h
-nstun/nstun.o: nstun/nstun.h nstun/core.h nstun/net_defs.h logs.h macros.h
-nstun/nstun.o: nstun/tcp.h util.h nsjail.h config.pb.h
-nstun/iface.o: logs.h nsjail.h config.pb.h nstun/nstun.h
-nstun/tun.o: nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
-nstun/ip.o: nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
-nstun/icmp.o: nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h macros.h
-nstun/udp.o: nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h macros.h
-nstun/udp.o: nstun/socks5.h
+nstun/nstun.o: nstun/nstun.h nstun/core.h nstun/net_defs.h nstun/icmp.h
+nstun/nstun.o: nstun/iface.h nstun/ip.h logs.h macros.h nstun/tcp.h
+nstun/nstun.o: nstun/tun.h nstun/udp.h util.h nsjail.h config.pb.h
+nstun/iface.o: nstun/iface.h logs.h macros.h nstun/net_defs.h nsjail.h
+nstun/iface.o: config.pb.h nstun/nstun.h
+nstun/tun.o: nstun/tun.h nstun/core.h nstun/net_defs.h nstun/nstun.h
+nstun/tun.o: nstun/icmp.h nstun/ip.h logs.h
+nstun/ip.o: nstun/ip.h nstun/core.h nstun/net_defs.h nstun/nstun.h
+nstun/ip.o: nstun/icmp.h logs.h nstun/tcp.h nstun/udp.h
+nstun/icmp.o: nstun/icmp.h nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
+nstun/icmp.o: macros.h nstun/tun.h
+nstun/udp.o: nstun/udp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
+nstun/udp.o: nstun/icmp.h logs.h macros.h nstun/socks5.h nstun/tun.h
 nstun/tcp.o: nstun/tcp.h nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
-nstun/tcp.o: macros.h nstun/socks5.h
+nstun/tcp.o: macros.h nstun/socks5.h nstun/tun.h
 config.pb.o: config.pb.h

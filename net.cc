@@ -55,6 +55,7 @@
 
 #include "logs.h"
 #include "macros.h"
+#include "nstun/nstun.h"
 #include "util.h"
 
 #define STR_(x) #x
@@ -221,53 +222,53 @@ static void pastaProcess(nsj_t* nsj, int pid, int err_pipe) {
 	argv.push_back("-f");
 	argv.push_back("-q");
 
-	if (nsj->njc.user_net().nat()) {
-		if (!nsj->njc.user_net().enable_ip4_dhcp()) {
+	if (nsj->njc.user_net().pasta().nat()) {
+		if (!nsj->njc.user_net().pasta().enable_ip4_dhcp()) {
 			argv.push_back("--no-dhcp");
 		}
-		if (!nsj->njc.user_net().enable_ip6_dhcp()) {
+		if (!nsj->njc.user_net().pasta().enable_ip6_dhcp()) {
 			argv.push_back("--no-dhcpv6");
 		}
-		if (!nsj->njc.user_net().enable_ip6_ra()) {
+		if (!nsj->njc.user_net().pasta().enable_ip6_ra()) {
 			argv.push_back("--no-ra");
 		}
 
-		if (!nsj->njc.user_net().enable_ip4_dhcp() &&
-		    !nsj->njc.user_net().enable_ip6_dhcp()) {
+		if (!nsj->njc.user_net().pasta().enable_ip4_dhcp() &&
+		    !nsj->njc.user_net().pasta().enable_ip6_dhcp()) {
 			argv.push_back("--config-net");
 		}
 
-		if (nsj->njc.user_net().enable_dns()) {
+		if (nsj->njc.user_net().pasta().enable_dns()) {
 			argv.push_back("--dhcp-dns");
 		}
-		if (!nsj->njc.user_net().dns_forward().empty()) {
+		if (!nsj->njc.user_net().pasta().dns_forward().empty()) {
 			argv.push_back("--dns-forward");
-			argv.push_back(nsj->njc.user_net().dns_forward().c_str());
+			argv.push_back(nsj->njc.user_net().pasta().dns_forward().c_str());
 		}
 
-		if (!nsj->njc.user_net().enable_tcp()) {
+		if (!nsj->njc.user_net().pasta().enable_tcp()) {
 			argv.push_back("--no-tcp");
 		}
-		if (!nsj->njc.user_net().enable_udp()) {
+		if (!nsj->njc.user_net().pasta().enable_udp()) {
 			argv.push_back("--no-udp");
 		}
-		if (!nsj->njc.user_net().enable_icmp()) {
+		if (!nsj->njc.user_net().pasta().enable_icmp()) {
 			argv.push_back("--no-icmp");
 		}
-		if (!nsj->njc.user_net().map_gw()) {
+		if (!nsj->njc.user_net().pasta().map_gw()) {
 			argv.push_back("--no-map-gw");
 		}
 
-		if (!nsj->njc.user_net().ip().empty()) {
+		if (!nsj->njc.user_net().ip4().empty()) {
 			argv.push_back("-a");
-			argv.push_back(nsj->njc.user_net().ip().c_str());
-			if (!nsj->njc.user_net().mask().empty()) {
+			argv.push_back(nsj->njc.user_net().ip4().c_str());
+			if (!nsj->njc.user_net().pasta().mask4().empty()) {
 				argv.push_back("-n");
-				argv.push_back(nsj->njc.user_net().mask().c_str());
+				argv.push_back(nsj->njc.user_net().pasta().mask4().c_str());
 			}
-			if (!nsj->njc.user_net().gw().empty()) {
+			if (!nsj->njc.user_net().gw4().empty()) {
 				argv.push_back("-g");
-				argv.push_back(nsj->njc.user_net().gw().c_str());
+				argv.push_back(nsj->njc.user_net().gw4().c_str());
 			}
 		}
 
@@ -281,14 +282,15 @@ static void pastaProcess(nsj_t* nsj, int pid, int err_pipe) {
 			}
 		}
 
-		if (!nsj->njc.user_net().ip4_enabled() && !nsj->njc.user_net().ip6_enabled()) {
+		if (!nsj->njc.user_net().pasta().ip4_enabled() &&
+		    !nsj->njc.user_net().pasta().ip6_enabled()) {
 			LOG_E("Both IPv4 and IPv6 disabled for user networking");
 			_exit(EXIT_FAILURE);
 		}
-		if (!nsj->njc.user_net().ip4_enabled()) {
+		if (!nsj->njc.user_net().pasta().ip4_enabled()) {
 			argv.push_back("-6");
 		}
-		if (!nsj->njc.user_net().ip6_enabled()) {
+		if (!nsj->njc.user_net().pasta().ip6_enabled()) {
 			argv.push_back("-4");
 		}
 
@@ -298,24 +300,24 @@ static void pastaProcess(nsj_t* nsj, int pid, int err_pipe) {
 		}
 	}
 
-	if (!nsj->njc.user_net().tcp_map_in().empty()) {
+	if (!nsj->njc.user_net().pasta().tcp_map_in().empty()) {
 		argv.push_back("-t");
-		argv.push_back(nsj->njc.user_net().tcp_map_in().c_str());
+		argv.push_back(nsj->njc.user_net().pasta().tcp_map_in().c_str());
 	}
-	if (!nsj->njc.user_net().udp_map_in().empty()) {
+	if (!nsj->njc.user_net().pasta().udp_map_in().empty()) {
 		argv.push_back("-u");
-		argv.push_back(nsj->njc.user_net().udp_map_in().c_str());
+		argv.push_back(nsj->njc.user_net().pasta().udp_map_in().c_str());
 	}
-	if (!nsj->njc.user_net().tcp_map_out().empty()) {
+	if (!nsj->njc.user_net().pasta().tcp_map_out().empty()) {
 		argv.push_back("-T");
-		argv.push_back(nsj->njc.user_net().tcp_map_out().c_str());
+		argv.push_back(nsj->njc.user_net().pasta().tcp_map_out().c_str());
 	}
-	if (!nsj->njc.user_net().udp_map_out().empty()) {
+	if (!nsj->njc.user_net().pasta().udp_map_out().empty()) {
 		argv.push_back("-U");
-		argv.push_back(nsj->njc.user_net().udp_map_out().c_str());
+		argv.push_back(nsj->njc.user_net().pasta().udp_map_out().c_str());
 	}
 
-	if (!(nsj->njc.user_net().nat())) {
+	if (!(nsj->njc.user_net().pasta().nat())) {
 		argv.push_back("--splice-only");
 	}
 
@@ -406,14 +408,21 @@ static bool spawnPasta(nsj_t* nsj, int pid) {
 	return true;
 }
 
-bool initParent(nsj_t* nsj, int pid) {
+bool initParent(nsj_t* nsj, pid_t pid, int pipefd) {
 	if (nsj->njc.has_user_net()) {
 		if (!nsj->njc.clone_newnet()) {
 			LOG_E("Support for User-Mode Networking requested but CLONE_NEWNET "
 			      "is not enabled");
 			return false;
 		}
-		if (!nsj->njc.user_net().use_nstun()) {
+		if (nsj->njc.user_net().backend() == nsjail::NsJailConfig_UserNet_Backend_NSTUN) {
+			if (!nstun_init_parent(pipefd, nsj)) {
+				LOG_E("nstun_init_parent() failed");
+				return false;
+			}
+		} else if (nsj->njc.user_net().backend() ==
+			       nsjail::NsJailConfig_UserNet_Backend_PASTA &&
+			   nsj->njc.user_net().has_pasta()) {
 			if (!spawnPasta(nsj, pid)) {
 				return false;
 			}
@@ -759,93 +768,6 @@ static bool parseIp6(const std::string& ip_str, struct in6_addr* addr, int* mask
 	return inet_pton(AF_INET6, ip.c_str(), addr) == 1;
 }
 
-static bool applyEncapRoute(struct nl_sock* sk, const nsjail::NsJailConfig_TrafficRule& rule,
-    int family, uint32_t table_id) {
-	struct rtnl_route* route = rtnl_route_alloc();
-	if (!route) {
-		LOG_E("rtnl_route_alloc() failed");
-		return false;
-	}
-
-	rtnl_route_set_table(route, table_id);
-	rtnl_route_set_family(route, family);
-	rtnl_route_set_scope(route, RT_SCOPE_UNIVERSE);
-	rtnl_route_set_type(route, RTN_UNICAST);
-
-	struct nl_addr* dst = nl_addr_alloc(family == AF_INET ? 4 : 16);
-	nl_addr_set_family(dst, family);
-	nl_addr_set_prefixlen(dst, 0);
-	rtnl_route_set_dst(route, dst);
-	nl_addr_put(dst);
-
-	struct rtnl_nexthop* nh = rtnl_route_nh_alloc();
-	if (!nh) {
-		rtnl_route_put(route);
-		return false;
-	}
-
-	unsigned int ifindex =
-	    if_nametoindex(rule.has_oif() && !rule.oif().empty() ? rule.oif().c_str() : "lo");
-	if (ifindex > 0) rtnl_route_nh_set_ifindex(nh, ifindex);
-
-	if (rule.has_encap_type()) {
-		struct rtnl_nh_encap* encap = rtnl_nh_encap_alloc();
-		if (!encap) {
-			rtnl_route_nh_free(nh);
-			rtnl_route_put(route);
-			return false;
-		}
-
-		if (rule.encap_type() == nsjail::NsJailConfig_TrafficRule::ENCAP_IP) {
-			struct nl_addr* encap_dst;
-			if (rule.has_encap_dst() &&
-			    nl_addr_parse(rule.encap_dst().c_str(), AF_INET, &encap_dst) == 0) {
-				rtnl_nh_encap_ip(encap, encap_dst);
-				if (rule.has_encap_id())
-					rtnl_nh_set_encap_ip_id(encap, rule.encap_id());
-				rtnl_route_nh_set_encap(nh, encap);
-				nl_addr_put(encap_dst);
-			}
-		} else if (rule.encap_type() == nsjail::NsJailConfig_TrafficRule::ENCAP_IP6) {
-			struct nl_addr* encap_dst;
-			if (rule.has_encap_dst() &&
-			    nl_addr_parse(rule.encap_dst().c_str(), AF_INET6, &encap_dst) == 0) {
-				rtnl_nh_encap_ip6(encap, encap_dst);
-				if (rule.has_encap_id())
-					rtnl_nh_set_encap_ip6_id(encap, rule.encap_id());
-				rtnl_route_nh_set_encap(nh, encap);
-				nl_addr_put(encap_dst);
-			}
-		} else if (rule.encap_type() == nsjail::NsJailConfig_TrafficRule::ENCAP_MPLS) {
-			struct nl_addr* encap_dst;
-			if (rule.has_encap_dst() &&
-			    nl_addr_parse(rule.encap_dst().c_str(), AF_MPLS, &encap_dst) == 0) {
-				uint8_t ttl = rule.has_encap_id() ? rule.encap_id() : 255;
-				rtnl_nh_encap_mpls(encap, encap_dst, ttl);
-				rtnl_route_nh_set_encap(nh, encap);
-				nl_addr_put(encap_dst);
-			}
-		} else if (rule.encap_type() == nsjail::NsJailConfig_TrafficRule::ENCAP_ILA) {
-			if (rule.has_encap_ila_locator()) {
-				rtnl_nh_encap_ila(encap, rule.encap_ila_locator());
-				rtnl_route_nh_set_encap(nh, encap);
-			}
-		}
-	}
-
-	rtnl_route_add_nexthop(route, nh);
-
-	int err = rtnl_route_add(sk, route, NLM_F_CREATE);
-	if (err < 0) {
-		LOG_E("rtnl_route_add() failed: %s", nl_geterror(err));
-		rtnl_route_put(route);
-		return false;
-	}
-
-	rtnl_route_put(route);
-	return true;
-}
-
 static bool applyTrafficRule(
     struct nl_sock* sk, const nsjail::NsJailConfig_TrafficRule& rule, int family) {
 	struct rtnl_rule* rtnl_rule = rtnl_rule_alloc();
@@ -915,16 +837,6 @@ static bool applyTrafficRule(
 		} else if (rule.action() == nsjail::NsJailConfig_TrafficRule::REJECT) {
 			rtnl_rule_set_action(rtnl_rule, FR_ACT_UNREACHABLE);
 
-		} else if (rule.action() == nsjail::NsJailConfig_TrafficRule::ENCAP) {
-			static uint32_t current_table = 1000;
-			uint32_t table_id = current_table++;
-			rtnl_rule_set_action(rtnl_rule, FR_ACT_TO_TBL);
-			rtnl_rule_set_table(rtnl_rule, table_id);
-			if (!applyEncapRoute(sk, rule, family, table_id)) {
-				rtnl_rule_put(rtnl_rule);
-				return false;
-			}
-
 		} else if (rule.action() == nsjail::NsJailConfig_TrafficRule::ALLOW) {
 			rtnl_rule_set_action(rtnl_rule, FR_ACT_TO_TBL);
 			rtnl_rule_set_table(rtnl_rule, RT_TABLE_MAIN);	// Just pass to main routing
@@ -980,6 +892,18 @@ bool initNsFromChild(nsj_t* nsj) {
 		}
 	}
 
+	return true;
+}
+
+bool initChildPreSync(nsj_t* nsj, int pipefd) {
+	if (nsj->njc.has_user_net()) {
+		if (nsj->njc.user_net().backend() == nsjail::NsJailConfig_UserNet_Backend_NSTUN) {
+			if (!nstun_init_child(pipefd, nsj)) {
+				LOG_E("nstun_init_child() failed");
+				return false;
+			}
+		}
+	}
 	return true;
 }
 
