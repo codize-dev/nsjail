@@ -13,6 +13,7 @@ enum class TcpState {
 	SYN_SENT,	   /* host connecting */
 	SOCKS5_INIT,	   /* sent SOCKS5 greeting */
 	SOCKS5_CONNECTING, /* sent SOCKS5 connect request */
+	HTTP_CONNECT_INIT, /* sent HTTP CONNECT request */
 	ESTABLISHED,
 	FIN_WAIT_1,
 	FIN_WAIT_2,
@@ -24,10 +25,16 @@ enum class TcpState {
 
 struct TcpFlow {
 	int host_fd;
-	FlowKey key;
+	bool is_ipv6;
+	union {
+		FlowKey4 key4;
+		FlowKey6 key6;
+	};
+
+	enum class ProxyMode : uint8_t { NONE, SOCKS5, HTTP_CONNECT };
 
 	TcpState state;
-	bool use_socks5;
+	ProxyMode proxy_mode;
 	bool host_eof;
 	bool guest_eof;
 	bool fin_sent;
@@ -48,7 +55,7 @@ struct TcpFlow {
 	std::vector<uint8_t> tx_buffer;
 	size_t tx_acked_offset;
 
-	/* Buffer for accumulating SOCKS5 responses to avoid MSG_PEEK livelocks */
+	/* Buffer for accumulating proxy handshake responses (SOCKS5/HTTP CONNECT) */
 	std::vector<uint8_t> socks5_rx_buffer;
 
 	/* Buffer for data from guest to host to avoid dropping packets on EAGAIN */
@@ -61,12 +68,15 @@ struct TcpFlow {
 	time_t last_active;
 };
 
-void tcp_send_packet(
+void tcp_send_packet4(
+    Context* ctx, TcpFlow* flow, uint8_t flags, const uint8_t* data = nullptr, size_t len = 0);
+void tcp_send_packet6(
     Context* ctx, TcpFlow* flow, uint8_t flags, const uint8_t* data = nullptr, size_t len = 0);
 void tcp_destroy_flow(Context* ctx, TcpFlow* flow);
 void push_to_guest(Context* ctx, TcpFlow* flow);
 
-void handle_tcp(Context* ctx, const ip4_hdr* ip, const uint8_t* payload, size_t len);
+void handle_tcp4(Context* ctx, const ip4_hdr* ip, const uint8_t* payload, size_t len);
+void handle_tcp6(Context* ctx, const ip6_hdr* ip, const uint8_t* payload, size_t len);
 void handle_host_tcp(Context* ctx, int fd, uint32_t events);
 void handle_host_tcp_accept(Context* ctx, int listen_fd, const nstun_rule_t& rule);
 
