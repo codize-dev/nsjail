@@ -30,7 +30,7 @@ COMMON_FLAGS += -O2 -c \
 	-Ikafel/include
 
 CXXFLAGS += $(USER_DEFINES) $(COMMON_FLAGS) $(PROTOBUF_CFLAGS) -I. \
-	-std=c++20 -fno-exceptions -Wno-unused -Wno-unused-parameter
+	-std=c++20 -fno-exceptions -Wno-unused -Wno-unused-parameter -Wno-c99-designator
 
 LDFLAGS += -pie -Wl,-z,noexecstack -lpthread $(PROTOBUF_LIBS)
 
@@ -172,14 +172,21 @@ test: $(BIN)
 	# --- SOCKS5 proxy test ---
 	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'wget -4 https://dns.google -O /dev/null && exit 77', 77)
 	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'wget -6 https://dns.google -O /dev/null && exit 77', 77)
+	# SOCKS5 UDP (DNS over UDP) and TCP (DNS over TCP) via IPv4 and IPv6 resolvers
+	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'host -U dns.google 8.8.8.8 && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'host -T dns.google 8.8.8.8 && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'host -U dns.google 2001:4860:4860::8888 && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'host -T dns.google 2001:4860:4860::8888 && exit 77', 77)
 
 	# --- HTTP CONNECT proxy test ---
 	$(call run_test, ./nsjail --config tests/connect.cfg -q -t 3 -- /bin/bash -c 'wget -4 https://dns.google -O /dev/null && exit 77', 77)
 	$(call run_test, ./nsjail --config tests/connect.cfg -q -t 3 -- /bin/bash -c 'wget -6 https://dns.google -O /dev/null && exit 77', 77)
+	# HTTP CONNECT DNS over TCP via IPv4 and IPv6 resolvers
+	$(call run_test, ./nsjail --config tests/connect.cfg -q -t 3 -- /bin/bash -c 'host -T dns.google 8.8.8.8 && exit 77', 77)
+	$(call run_test, ./nsjail --config tests/connect.cfg -q -t 3 -- /bin/bash -c 'host -T dns.google 2001:4860:4860::8888 && exit 77', 77)
 
-	# --- HOST_TO_GUEST proxy test ---
-	$(call run_test, ./nsjail --config tests/dns_http_host_to_guest.cfg -q -t 3 -- /bin/bash -c 'nc -v -z -w 2 127.0.0.1 8080 || exit 77', 77)
-	$(call run_test, ./nsjail --config tests/dns_http_host_to_guest.cfg -q -t 3 -- /bin/bash -c 'nc -v -z -w 2 ::1 8081 || exit 77', 77)
+	# --- HOST_TO_GUEST TCP inbound proxy test (IPv4 + IPv6) ---
+	$(call run_test, { ./nsjail --config tests/dns_http_host_to_guest.cfg -q -t 3 & }; sleep 1; wget -4 -q -O /dev/null --timeout=5 http://127.0.0.1:8080/ && wget -6 -q -O /dev/null --timeout=5 http://[::1]:8080/ && exit 77, 77)
 
 	# --- --experimental_mnt=old ---
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --rw --chroot / --user 99999 --group 99999 -- /bin/bash -c 'touch $(HOME)/nsjail_test && exit 77', 77)
@@ -258,24 +265,24 @@ uts.o: uts.h nsjail.h config.pb.h logs.h
 user.o: user.h nsjail.h config.pb.h logs.h macros.h subproc.h util.h
 util.o: util.h nsjail.h config.pb.h logs.h macros.h
 nstun/nstun.o: nstun/nstun.h nstun/core.h nstun/net_defs.h nstun/icmp.h
-nstun/nstun.o: nstun/iface.h nstun/ip.h logs.h macros.h nstun/tcp.h
-nstun/nstun.o: nstun/policy.h nstun/tun.h nstun/udp.h util.h nsjail.h
+nstun/nstun.o: nstun/iface.h nstun/ip.h logs.h macros.h nstun/policy.h
+nstun/nstun.o: nstun/tcp.h nstun/tun.h nstun/udp.h util.h nsjail.h
 nstun/nstun.o: config.pb.h
 nstun/policy.o: nstun/policy.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/policy.o: logs.h nstun/tcp.h nsjail.h config.pb.h
-nstun/encap.o: nstun/encap.h logs.h
+nstun/policy.o: logs.h config.pb.h nsjail.h
+nstun/encap.o: nstun/encap.h nstun/net_defs.h logs.h
 nstun/iface.o: nstun/iface.h logs.h macros.h nstun/net_defs.h nsjail.h
 nstun/iface.o: config.pb.h nstun/nstun.h
 nstun/tun.o: nstun/tun.h nstun/core.h nstun/net_defs.h nstun/nstun.h
 nstun/tun.o: nstun/icmp.h nstun/ip.h logs.h
 nstun/ip.o: nstun/ip.h nstun/core.h nstun/net_defs.h nstun/nstun.h
 nstun/ip.o: nstun/icmp.h logs.h nstun/tcp.h nstun/udp.h
-nstun/icmp.o: nstun/icmp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/icmp.o: nstun/policy.h logs.h macros.h nstun/tun.h
+nstun/icmp.o: nstun/icmp.h nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
+nstun/icmp.o: macros.h nstun/policy.h nstun/tun.h
 nstun/udp.o: nstun/udp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/udp.o: nstun/policy.h nstun/icmp.h logs.h macros.h nstun/encap.h
+nstun/udp.o: nstun/encap.h nstun/icmp.h logs.h macros.h nstun/policy.h
 nstun/udp.o: nstun/tun.h
 nstun/tcp.o: nstun/tcp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/tcp.o: nstun/policy.h logs.h macros.h nstun/encap.h nstun/tun.h util.h
+nstun/tcp.o: nstun/encap.h logs.h macros.h nstun/policy.h nstun/tun.h util.h
 nstun/tcp.o: nsjail.h config.pb.h
 config.pb.o: config.pb.h
