@@ -27,7 +27,7 @@ jobs:
         id: app-token
         with:
           client-id: ${{ vars.SYNCER_APP_ID }}
-          private-key: ${{ vars.SYNCER_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.SYNCER_APP_PRIVATE_KEY }}
           permission-contents: write
 
       - name: Pull upstream changes
