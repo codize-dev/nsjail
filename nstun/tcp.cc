@@ -232,7 +232,27 @@ static void tcp_rst_and_destroy(Context* ctx, TcpFlow* flow) {
 	tcp_destroy_flow(ctx, flow);
 }
 
+static void release_tcp_rx_buffer(Context* ctx, TcpFlow* flow) {
+	size_t bytes = flow->rx_buffer.size();
+	if (bytes == 0) {
+		flow->rx_sent_offset = 0;
+		return;
+	}
+	if (!ctx->tcp_rx_buffer_budget.release(bytes)) {
+		LOG_F("TCP rx buffer budget accounting underflow: used=%zu release=%zu",
+		    ctx->tcp_rx_buffer_budget.used(), bytes);
+		abort();
+	}
+	flow->rx_buffer.clear();
+	flow->rx_sent_offset = 0;
+	/* Keep normal-flow allocations reusable, but release large retained buffers. */
+	if (flow->rx_buffer.capacity() > TCP_RECV_BUF_SIZE) {
+		std::vector<uint8_t>().swap(flow->rx_buffer);
+	}
+}
+
 void tcp_destroy_flow(Context* ctx, TcpFlow* flow) {
+	release_tcp_rx_buffer(ctx, flow);
 	if (flow->host_fd != -1) {
 		epoll_ctl(ctx->epoll_fd, EPOLL_CTL_DEL, flow->host_fd, nullptr);
 		ctx->flows_by_fd.erase(flow->host_fd);
@@ -304,8 +324,7 @@ bool flush_to_host(Context* ctx, TcpFlow* flow) {
 	if (written > 0) {
 		flow->rx_sent_offset += written;
 		if (flow->rx_sent_offset >= flow->rx_buffer.size()) {
-			flow->rx_buffer.clear();
-			flow->rx_sent_offset = 0;
+			release_tcp_rx_buffer(ctx, flow);
 		}
 
 		/* We made progress, remove EPOLLOUT if empty */
@@ -614,10 +633,16 @@ static void tcp_process_data(Context* ctx, TcpFlow* flow, const tcp_hdr* tcp,
 				const uint8_t* new_data = data + overlap;
 				size_t new_data_len = data_len - overlap;
 
-				if (flow->rx_buffer.size() + new_data_len >
-				    TCP_RX_BUFFER_HARD_CAP) {
+				if (new_data_len >
+				    TCP_RX_BUFFER_HARD_CAP - flow->rx_buffer.size()) {
 					LOG_D("TCP rx_buffer reached 8MB limit (DoS protection), "
 					      "dropping");
+					return;
+				}
+				if (!ctx->tcp_rx_buffer_budget.try_reserve(new_data_len)) {
+					LOG_D("Aggregate TCP rx_buffer reached %zuMB limit (DoS "
+					      "protection), dropping",
+					    ctx->tcp_rx_buffer_budget.limit() / (1024 * 1024));
 					return;
 				}
 
@@ -646,7 +671,14 @@ static void tcp_process_data(Context* ctx, TcpFlow* flow, const tcp_hdr* tcp,
 				flow->syn_acked = true;
 			} else {
 				int32_t acked_bytes = ack - flow->ack_from_guest;
-				if (acked_bytes > 0) {
+				/*
+				 * RFC 793: an acceptable ACK must not acknowledge data
+				 * we never sent (SEG.ACK <= SND.NXT). Without this the
+				 * guest can advance tx_acked_offset past tx_buffer.size(),
+				 * which the framing in push_to_guest() relies on staying
+				 * within bounds.
+				 */
+				if (acked_bytes > 0 && (int32_t)(ack - flow->seq_to_guest) <= 0) {
 					flow->ack_from_guest = ack;
 					if (!flow->syn_acked) {
 						flow->syn_acked = true;
@@ -1054,6 +1086,53 @@ void handle_host_tcp_accept(Context* ctx, int listen_fd, const nstun_rule_t& rul
 			PLOG_E("accept4()");
 		}
 		return;
+	}
+
+	/*
+	 * A HOST_TO_GUEST listener is created from a REDIRECT rule, but the
+	 * accepted peer still has to pass the ordered HOST_TO_GUEST policy.
+	 * Evaluate the real peer tuple before creating a flow into the guest.
+	 */
+	if (rule.is_ipv6) {
+		const struct sockaddr_in6* client6 =
+		    reinterpret_cast<const struct sockaddr_in6*>(&client_ss);
+		struct sockaddr_in6 server6 = INIT_SOCKADDR_IN6(AF_INET6);
+		socklen_t servlen6 = sizeof(server6);
+		if (getsockname(fd, (struct sockaddr*)&server6, &servlen6) == -1) {
+			PLOG_E("getsockname() for inbound TCP6");
+			close(fd);
+			return;
+		}
+
+		RuleResult policy = evaluate_rules6(ctx, NSTUN_DIR_HOST_TO_GUEST, NSTUN_PROTO_TCP,
+		    client6->sin6_addr.s6_addr, server6.sin6_addr.s6_addr,
+		    ntohs(client6->sin6_port), ntohs(server6.sin6_port));
+
+		if (policy.action == NSTUN_ACTION_DROP || policy.action == NSTUN_ACTION_REJECT) {
+			LOG_W("Blocking inbound TCP6 connection by HOST_TO_GUEST policy");
+			close(fd);
+			return;
+		}
+	} else {
+		const struct sockaddr_in* client4 =
+		    reinterpret_cast<const struct sockaddr_in*>(&client_ss);
+		struct sockaddr_in server4 = INIT_SOCKADDR_IN(AF_INET);
+		socklen_t servlen4 = sizeof(server4);
+		if (getsockname(fd, (struct sockaddr*)&server4, &servlen4) == -1) {
+			PLOG_E("getsockname() for inbound TCP");
+			close(fd);
+			return;
+		}
+
+		RuleResult policy = evaluate_rules4(ctx, NSTUN_DIR_HOST_TO_GUEST, NSTUN_PROTO_TCP,
+		    client4->sin_addr.s_addr, server4.sin_addr.s_addr, ntohs(client4->sin_port),
+		    ntohs(server4.sin_port));
+
+		if (policy.action == NSTUN_ACTION_DROP || policy.action == NSTUN_ACTION_REJECT) {
+			LOG_W("Blocking inbound TCP connection by HOST_TO_GUEST policy");
+			close(fd);
+			return;
+		}
 	}
 
 	LOG_D("Accepted fd=%d", fd);
