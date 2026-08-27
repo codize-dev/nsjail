@@ -38,6 +38,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <limits>
+
 #include "logs.h"
 #include "macros.h"
 #include "subproc.h"
@@ -102,12 +104,16 @@ static bool hasGidMapSelf(nsj_t* nsj) {
 	return false;
 }
 
+static bool shouldDenySetGroups(nsj_t* nsj) {
+	return nsj->njc.clone_newuser() && nsj->orig_euid != 0 && hasGidMapSelf(nsj);
+}
+
 static bool setGroupsDeny(nsj_t* nsj, pid_t pid) {
 	/*
 	 * No need to write 'deny' to /proc/pid/setgroups if our euid==0, as writing to
 	 * uid_map/gid_map will succeed anyway
 	 */
-	if (!nsj->njc.clone_newuser() || nsj->orig_euid == 0 || !hasGidMapSelf(nsj)) {
+	if (!shouldDenySetGroups(nsj)) {
 		return true;
 	}
 
@@ -288,12 +294,17 @@ bool initNsFromChild(nsj_t* nsj) {
 
 	LOG_D("setgroups(%zu, %s)", groups.size(), groupsString.c_str());
 	if (setgroups(groups.size(), groups.data()) == -1) {
-		/* Indicate error if specific groups were requested */
-		if (groups.size() > 0) {
+		const int setgroupsErrno = errno;
+		/* EPERM is expected after the parent writes "deny" to /proc/pid/setgroups. */
+		if (!shouldDenySetGroups(nsj) || setgroupsErrno != EPERM || groups.size() > 0) {
+			errno = setgroupsErrno;
 			PLOG_E("setgroups(%zu, %s) failed", groups.size(), groupsString.c_str());
 			return false;
 		}
-		PLOG_D("setgroups(%zu, %s) failed", groups.size(), groupsString.c_str());
+
+		errno = setgroupsErrno;
+		PLOG_D("setgroups(%zu, %s) failed (expected in unprivileged user namespace)",
+		    groups.size(), groupsString.c_str());
 	}
 
 	if (!setResUid(nsj->uids[0].inside_id)) {
@@ -322,8 +333,9 @@ static uid_t parseUid(const std::string& id) {
 	if (pw != nullptr) {
 		return pw->pw_uid;
 	}
-	if (util::isANumber(id.c_str())) {
-		return (uid_t)strtoimax(id.c_str(), NULL, 0);
+	uint64_t parsed = 0;
+	if (util::parseUint64(id.c_str(), &parsed) && parsed <= std::numeric_limits<uid_t>::max()) {
+		return (uid_t)parsed;
 	}
 	return (uid_t)-1;
 }
@@ -336,8 +348,9 @@ static gid_t parseGid(const std::string& id) {
 	if (gr != nullptr) {
 		return gr->gr_gid;
 	}
-	if (util::isANumber(id.c_str())) {
-		return (gid_t)strtoimax(id.c_str(), NULL, 0);
+	uint64_t parsed = 0;
+	if (util::parseUint64(id.c_str(), &parsed) && parsed <= std::numeric_limits<gid_t>::max()) {
+		return (gid_t)parsed;
 	}
 	return (gid_t)-1;
 }

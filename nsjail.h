@@ -38,6 +38,8 @@
 
 #include "config.pb.h"
 
+struct nstun_context_handle;
+
 static const int nssigs[] = {
     SIGINT,
     SIGQUIT,
@@ -59,6 +61,7 @@ struct pids_t {
 	int pid_syscall_fd;
 	pid_t pasta_pid;
 	pthread_t monitor_tid;
+	nstun_context_handle* nstun = nullptr;
 };
 
 struct idmap_t {
@@ -95,6 +98,7 @@ struct nsj_t {
 	std::vector<idmap_t> uids;
 	std::vector<idmap_t> gids;
 	std::vector<int> openfds;
+	std::vector<int> passfds;
 
 	std::vector<pipemap_t> pipes;
 	int exit_status;

@@ -11,12 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <charconv>
 #include <thread>
 
 #include "core.h"
@@ -30,6 +30,11 @@
 #include "tun.h"
 #include "udp.h"
 #include "util.h"
+
+struct nstun_context_handle {
+	nstun::Context* context = nullptr;
+	std::thread worker;
+};
 
 namespace nstun {
 
@@ -91,10 +96,23 @@ static void networkLoop(Context* ctx) {
 	LOG_D("nstun network loop started on tap_fd=%d", ctx->tap_fd);
 
 	defer {
-		close(ctx->tap_fd);
-		close(ctx->epoll_fd);
-		delete ctx;
+		if (ctx->tap_fd != -1) {
+			close(ctx->tap_fd);
+			ctx->tap_fd = -1;
+		}
+		if (ctx->epoll_fd != -1) {
+			close(ctx->epoll_fd);
+			ctx->epoll_fd = -1;
+		}
+		/* The owner closes stop_fd after joining. Keeping it open prevents
+		 * reuse if the loop exits naturally before child reap. */
 	};
+
+	struct epoll_event stop_ev = {.events = EPOLLIN, .data = {.fd = ctx->stop_fd}};
+	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->stop_fd, &stop_ev) == -1) {
+		PLOG_E("epoll_ctl(EPOLL_CTL_ADD, stop_fd)");
+		return;
+	}
 
 	struct epoll_event ev = {.events = EPOLLIN, .data = {.fd = ctx->tap_fd}};
 	if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, ctx->tap_fd, &ev) == -1) {
@@ -125,7 +143,11 @@ static void networkLoop(Context* ctx) {
 		for (int i = 0; i < nfds; ++i) {
 			int fd = events[i].data.fd;
 
-			if (fd == ctx->tap_fd) {
+			if (fd == ctx->stop_fd) {
+				uint64_t value;
+				(void)TEMP_FAILURE_RETRY(read(ctx->stop_fd, &value, sizeof(value)));
+				return;
+			} else if (fd == ctx->tap_fd) {
 				ssize_t n = TEMP_FAILURE_RETRY(
 				    read(ctx->tap_fd, buf.get(), TUN_FRAME_BUF_SIZE));
 				if (n <= 0) {
@@ -187,7 +209,14 @@ bool nstun_init_child(int sock, nsj_t* nsj) {
 	return true;
 }
 
-bool nstun_init_parent(int sock, nsj_t* nsj) {
+bool nstun_init_parent(int sock, nsj_t* nsj, struct nstun_context_handle** out_handle) {
+	if (out_handle == nullptr) {
+		LOG_E("nstun_init_parent() requires an output handle");
+		return false;
+	}
+	*out_handle = nullptr;
+	auto handle = std::make_unique<nstun_context_handle>();
+
 	int tap_fd = util::recvFd(sock);
 	if (tap_fd < 0) {
 		LOG_E("Failed to receive TAP fd from child");
@@ -204,14 +233,22 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 	auto assign_ip = [](const std::string& str, uint32_t* ip) {
 		if (inet_pton(AF_INET, str.c_str(), ip) != 1) {
 			LOG_E("Failed to parse IP: %s", str.c_str());
+			return false;
 		}
+		return true;
 	};
 
 	if (!nsj->njc.user_net().ip4().empty()) {
-		assign_ip(nsj->njc.user_net().ip4(), &ctx->guest_ip4);
+		if (!assign_ip(nsj->njc.user_net().ip4(), &ctx->guest_ip4)) {
+			close(tap_fd);
+			return false;
+		}
 	}
 	if (!nsj->njc.user_net().gw4().empty()) {
-		assign_ip(nsj->njc.user_net().gw4(), &ctx->host_ip4);
+		if (!assign_ip(nsj->njc.user_net().gw4(), &ctx->host_ip4)) {
+			close(tap_fd);
+			return false;
+		}
 	}
 
 	if (!nsj->njc.user_net().ip6().empty()) {
@@ -231,60 +268,16 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 		}
 	}
 
-	auto parse_ip = [](const std::string& str, uint32_t* ip, uint32_t* mask) {
-		std::string ip_str = str;
-		int bits = 32;
-		size_t pos = str.find('/');
-		if (pos != std::string::npos) {
-			ip_str = str.substr(0, pos);
-			const char* p = str.c_str() + pos + 1;
-			auto [ptr, ec] = std::from_chars(p, str.c_str() + str.length(), bits);
-			if (ec != std::errc()) {
-				LOG_E("Failed to parse mask bits: %s", p);
-				return;
-			}
-		}
-		if (inet_pton(AF_INET, ip_str.c_str(), ip) != 1) {
-			LOG_E("Failed to parse IP string: %s", ip_str.c_str());
-			return;
-		}
-		*mask = (bits == 0) ? 0 : htonl(~((1ULL << (32 - bits)) - 1));
-	};
-
-	auto parse_ip6 = [](const std::string& str, uint8_t* ip6, uint8_t* mask6) {
-		std::string ip_str = str;
-		int bits = 128;
-		size_t pos = str.find('/');
-		if (pos != std::string::npos) {
-			ip_str = str.substr(0, pos);
-			const char* p = str.c_str() + pos + 1;
-			auto [ptr, ec] = std::from_chars(p, str.c_str() + str.length(), bits);
-			if (ec != std::errc()) {
-				LOG_E("Failed to parse mask bits: %s", p);
-				return;
-			}
-		}
-		if (inet_pton(AF_INET6, ip_str.c_str(), ip6) != 1) {
-			LOG_E("Failed to parse IPv6 string: %s", ip_str.c_str());
-			return;
-		}
-		memset(mask6, 0, nstun::IPV6_ADDR_LEN);
-		for (int i = 0; i < (int)nstun::IPV6_ADDR_LEN; i++) {
-			if (bits >= 8) {
-				mask6[i] = 0xFF;
-				bits -= 8;
-			} else if (bits > 0) {
-				mask6[i] = (uint8_t)(0xFF << (8 - bits));
-				bits = 0;
-			} else {
-				mask6[i] = 0;
-			}
-		}
-	};
-
 	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (ctx->epoll_fd == -1) {
 		PLOG_E("epoll_create1(EPOLL_CLOEXEC)");
+		close(ctx->tap_fd);
+		return false;
+	}
+	ctx->stop_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	if (ctx->stop_fd == -1) {
+		PLOG_E("eventfd(stop_fd)");
+		close(ctx->epoll_fd);
 		close(ctx->tap_fd);
 		return false;
 	}
@@ -293,8 +286,19 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 		for (auto& [fd, _] : ctx->host_listener_fd_to_rule) {
 			close(fd);
 		}
-		close(ctx->epoll_fd);
-		close(ctx->tap_fd);
+		ctx->host_listener_fd_to_rule.clear();
+		if (ctx->stop_fd != -1) {
+			close(ctx->stop_fd);
+			ctx->stop_fd = -1;
+		}
+		if (ctx->epoll_fd != -1) {
+			close(ctx->epoll_fd);
+			ctx->epoll_fd = -1;
+		}
+		if (ctx->tap_fd != -1) {
+			close(ctx->tap_fd);
+			ctx->tap_fd = -1;
+		}
 		return false;
 	};
 
@@ -307,14 +311,20 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 		if (status == nstun::RuleParseStatus::IGNORE) continue;
 
 		if (r.has_src_ip()) {
-			parse_ip(r.src_ip(), &nr.src_ip4, &nr.src_mask4);
+			if (!nstun::parse_ip4_cidr(r.src_ip(), &nr.src_ip4, &nr.src_mask4)) {
+				return cleanup_and_fail();
+			}
 		}
 		if (r.has_dst_ip()) {
-			parse_ip(r.dst_ip(), &nr.dst_ip4, &nr.dst_mask4);
+			if (!nstun::parse_ip4_cidr(r.dst_ip(), &nr.dst_ip4, &nr.dst_mask4)) {
+				return cleanup_and_fail();
+			}
 		}
 
-		if (inet_pton(AF_INET, r.redirect_ip().c_str(), &nr.redirect_ip4) != 1) {
-			LOG_E("Failed to parse redirect IP: %s", r.redirect_ip().c_str());
+		if (r.has_redirect_ip() &&
+		    inet_pton(AF_INET, r.redirect_ip().c_str(), &nr.redirect_ip4) != 1) {
+			LOG_E("Invalid redirect IPv4 address: %s", r.redirect_ip().c_str());
+			return cleanup_and_fail();
 		}
 		nr.redirect_port = r.has_redirect_port() ? r.redirect_port() : 0;
 
@@ -406,10 +416,14 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 		if (status == nstun::RuleParseStatus::IGNORE) continue;
 
 		if (r.has_src_ip()) {
-			parse_ip6(r.src_ip(), nr.src_ip6, nr.src_mask6);
+			if (!nstun::parse_ip6_cidr(r.src_ip(), nr.src_ip6, nr.src_mask6)) {
+				return cleanup_and_fail();
+			}
 		}
 		if (r.has_dst_ip()) {
-			parse_ip6(r.dst_ip(), nr.dst_ip6, nr.dst_mask6);
+			if (!nstun::parse_ip6_cidr(r.dst_ip(), nr.dst_ip6, nr.dst_mask6)) {
+				return cleanup_and_fail();
+			}
 		}
 
 		if (r.has_redirect_ip()) {
@@ -418,15 +432,17 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 				/* Proxy is always IPv4 */
 				if (inet_pton(AF_INET, r.redirect_ip().c_str(), &nr.redirect_ip4) !=
 				    1) {
-					LOG_E("Failed to parse redirect IP: %s",
+					LOG_E("Invalid redirect IPv4 address: %s",
 					    r.redirect_ip().c_str());
+					return cleanup_and_fail();
 				}
 			} else {
 				/* REDIRECT: target is IPv6 */
 				if (inet_pton(AF_INET6, r.redirect_ip().c_str(), nr.redirect_ip6) !=
 				    1) {
-					LOG_E("Failed to parse redirect IPv6: %s",
+					LOG_E("Invalid redirect IPv6 address: %s",
 					    r.redirect_ip().c_str());
+					return cleanup_and_fail();
 				}
 			}
 		}
@@ -516,8 +532,34 @@ bool nstun_init_parent(int sock, nsj_t* nsj) {
 	}
 
 	/* Spawn network loop thread */
-	std::thread t(nstun::networkLoop, ctx.release());
-	t.detach();
+	handle->context = ctx.get();
+	handle->worker = std::thread(nstun::networkLoop, handle->context);
+	ctx.release();
+	*out_handle = handle.release();
 
 	return true;
+}
+
+void nstun_destroy_parent(struct nstun_context_handle* handle) {
+	if (handle == nullptr) {
+		return;
+	}
+
+	if (handle->context != nullptr && handle->context->stop_fd != -1) {
+		const uint64_t one = 1;
+		if (TEMP_FAILURE_RETRY(write(handle->context->stop_fd, &one, sizeof(one))) == -1 &&
+		    errno != EPIPE) {
+			PLOG_W("write(stop_fd)");
+		}
+	}
+	if (handle->worker.joinable()) {
+		handle->worker.join();
+	}
+	if (handle->context != nullptr && handle->context->stop_fd != -1) {
+		close(handle->context->stop_fd);
+		handle->context->stop_fd = -1;
+	}
+	delete handle->context;
+	handle->context = nullptr;
+	delete handle;
 }

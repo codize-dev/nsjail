@@ -45,7 +45,7 @@ endif
 
 BIN = nsjail
 LIBS = kafel/libkafel.a
-TEST_BIN = tests/nstun_buffer_budget_test
+TEST_BINS = tests/nstun_buffer_budget_test tests/nstun_policy_test tests/nstun_ip_test
 
 # If PASTA_BIN_PATH is not provided in env, dynamically search for it if EMBED_PASTA is requested
 # or fallback to it naturally.
@@ -110,7 +110,7 @@ kafel/libkafel.a: kafel_init
 
 # Utilities
 clean:
-	$(RM) core Makefile.bak $(OBJS) $(SRCS_PB_CXX) $(SRCS_PB_H) $(SRCS_PB_O) $(BIN) $(TEST_BIN)
+	$(RM) core Makefile.bak $(OBJS) $(SRCS_PB_CXX) $(SRCS_PB_H) $(SRCS_PB_O) $(BIN) $(TEST_BINS)
 ifneq ("$(wildcard kafel/Makefile)","")
 	+$(MAKE) -C kafel clean
 endif
@@ -148,12 +148,32 @@ OLD_EF := --experimental_mnt=old
 NEW_EF := --experimental_mnt=new
 UID := $(shell id -u)
 
+.PHONY: test-cmdline
+test-cmdline: $(BIN)
+	# --- Command-line integer parsing ---
+	$(call run_test, ./nsjail --time_limit 1.5 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --time_limit=-1 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --max_cpus 4294967296 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --nice_level=2147483648 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --user 1000:1000:1.5 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --rlimit_cpu 1.5 --help > /dev/null, 255)
+	$(call run_test, ./nsjail --time_limit 0x10 --cgroup_mem_swap_max=-1 --user 1000:1000:1 --help > /dev/null, 0)
+
 .PHONY: test
-test: $(BIN) $(TEST_BIN)
-	$(call run_test, ./$(TEST_BIN), 0)
+test: $(BIN) $(TEST_BINS) test-cmdline
+	$(call run_test, ./tests/nstun_buffer_budget_test, 0)
+	$(call run_test, ./tests/nstun_policy_test, 0)
+	$(call run_test, ./tests/nstun_ip_test, 0)
 	# --- Basic sanity tests ---
 	$(call run_test, ./nsjail -q -Mo --chroot / --user 99999 --group 99999 -- /bin/true, 0)
 	$(call run_test, ./nsjail -q -Mo --chroot / --user 99999 --group 99999 -- /bin/false, 1)
+	$(call run_test, strace -f -qq -e inject=setgroups:error=EPERM ./nsjail -q -Mo --disable_clone_newuser --chroot / --user 99999 --group 99999 -- /bin/true, 255)
+ifeq ($(UID),0)
+	$(call run_test, setpriv --reuid 1000 --regid 1000 --groups 1234 -- ./nsjail -q -Mo --user 65534 --group 65534 --disable_clone_newnet --disable_clone_newcgroup --disable_clone_newns --disable_clone_newpid --disable_clone_newipc --disable_clone_newuts --disable_proc -- /bin/true, 255)
+	$(call run_test, setpriv --reuid 1000 --regid 1000 --clear-groups -- ./nsjail -q -Mo --user 65534 --group 65534 --disable_clone_newnet --disable_clone_newcgroup --disable_clone_newns --disable_clone_newpid --disable_clone_newipc --disable_clone_newuts --disable_proc -- /bin/true, 0)
+endif
+	$(call run_test, ./nsjail -q -Mo --chroot / --user 99999 --group 99999 -- /bin/true < /tmp, 255)
+	$(call run_test, ./nsjail -q -Mo --chroot / --user 99999 --group 99999 --pass_fd 0 -- /bin/true < /tmp, 0)
 	$(call run_test, ./nsjail --config tests/seccomp.cfg -q -t 2 -- /bin/bash -c 'strace -o /dev/null /bin/true || exit 77', 77)
 	$(call run_test, ./nsjail --config tests/basic.cfg -q -t 2 -- /bin/bash -c 'strace -o /dev/null /bin/true && exit 77', 77)
 	$(call run_test, ./nsjail --config tests/pasta-nat.cfg -q -t 3 -- /bin/bash -c 'sleep 0.2; ping -W 1 -c 1 8.8.8.8 && exit 77', 77)
@@ -171,7 +191,7 @@ endif
 	$(call run_test, ./nsjail --config tests/nat-ip4-only.cfg -q -t 3 --cap CAP_NET_RAW -- /bin/bash -c 'ping -4 -W 1 -c 1 8.8.8.8 && exit 77', 77)
 
 	# --- IPv6-only NAT tests ---
-	$(call run_test, ./nsjail --config tests/nat-ip6-only.cfg -q -t 3 -- /bin/true, 0)
+	$(call run_test, ./nsjail --config tests/nat-ip6-only.cfg -q -t 3 -- /bin/true < /dev/null, 0)
 
 	# --- SOCKS5 proxy test ---
 	$(call run_test, ./nsjail --config tests/socks5.cfg -q -t 3 -- /bin/bash -c 'wget -4 https://dns.google -O /dev/null && exit 77', 77)
@@ -201,8 +221,8 @@ endif
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -m none:/tmp:tmpfs:ro --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -R /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -B /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test && rm -f /tmp/nsjail_test', 0)
-	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 && exit 77', 77) # --rw (or lack of thereof) doesn't change already mounted tmpfs
-	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 --rw -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 && exit 77', 77) # --rw (or lack of thereof) doesn't affect already mounted tmpfs
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 || exit 77', 77)
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 --rw -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 && exit 77', 77)
 	$(call run_test, rm -f /run/user/$(UID)/nsjail_test2, 0)
 	$(call run_test, ./nsjail $(OLD_EF) --config configs/bash-with-fake-geteuid.cfg -q -t 1 < /dev/null, 0)
 	$(call run_test, ./nsjail $(OLD_EF) --config configs/bash-with-fake-geteuid.json -q -t 1 < /dev/null, 0)
@@ -240,8 +260,14 @@ endif
 	@echo "========================================"
 	@echo ""
 
-$(TEST_BIN): tests/nstun_buffer_budget_test.cc nstun/buffer_budget.h
+tests/nstun_buffer_budget_test: tests/nstun_buffer_budget_test.cc nstun/buffer_budget.h
 	$(CXX) $(filter-out -c,$(CXXFLAGS)) $< -o $@
+
+tests/nstun_policy_test: tests/nstun_policy_test.cc nstun/policy.cc logs.cc util.cc $(SRCS_PB_CXX)
+	$(CXX) $(filter-out -c,$(CXXFLAGS)) tests/nstun_policy_test.cc nstun/policy.cc logs.cc util.cc $(SRCS_PB_CXX) -o $@ $(LDFLAGS)
+
+tests/nstun_ip_test: tests/nstun_ip_test.cc nstun/net_defs.h
+	$(CXX) $(filter-out -c,$(CXXFLAGS)) tests/nstun_ip_test.cc -o $@
 
 # Dependencies (Generated by makedepend)
 # DO NOT DELETE THIS LINE -- make depend depends on it.
@@ -254,7 +280,8 @@ cmdline.o: mnt.h mnt_newapi.h user.h util.h
 config.o: config.h nsjail.h config.pb.h caps.h cmdline.h logs.h macros.h
 config.o: mnt.h user.h util.h
 contain.o: contain.h nsjail.h config.pb.h caps.h cgroup.h cgroup2.h config.h
-contain.o: cpu.h logs.h macros.h mnt.h net.h pid.h user.h util.h uts.h
+contain.o: cpu.h logs.h macros.h missing_defs.h mnt.h net.h pid.h user.h
+contain.o: util.h uts.h
 cpu.o: cpu.h nsjail.h config.pb.h logs.h util.h
 logs.o: logs.h macros.h util.h nsjail.h config.pb.h
 mnt.o: mnt.h nsjail.h config.pb.h logs.h macros.h mnt_legacy.h mnt_newapi.h
@@ -281,26 +308,27 @@ unotify/syscall.o: unotify/syscall.h unotify/record.h unotify/unotify.pb.h
 unotify/syscall.o: logs.h macros.h unotify/syscall_defs.h util.h nsjail.h
 unotify/syscall.o: config.pb.h
 util.o: util.h nsjail.h config.pb.h logs.h macros.h missing_defs.h
-nstun/nstun.o: nstun/nstun.h nstun/core.h nstun/net_defs.h nstun/icmp.h
-nstun/nstun.o: nstun/iface.h nstun/ip.h logs.h macros.h nstun/policy.h
-nstun/nstun.o: nstun/tcp.h nstun/tun.h nstun/udp.h util.h nsjail.h
-nstun/nstun.o: config.pb.h
-nstun/policy.o: nstun/policy.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/policy.o: logs.h config.pb.h nsjail.h
+nstun/nstun.o: nstun/nstun.h nstun/core.h nstun/buffer_budget.h
+nstun/nstun.o: nstun/net_defs.h nstun/icmp.h nstun/iface.h nstun/ip.h logs.h
+nstun/nstun.o: macros.h nstun/policy.h nstun/tcp.h nstun/tun.h nstun/udp.h
+nstun/nstun.o: util.h nsjail.h config.pb.h
+nstun/policy.o: nstun/policy.h nstun/core.h nstun/buffer_budget.h
+nstun/policy.o: nstun/net_defs.h nstun/nstun.h logs.h config.pb.h nsjail.h
 nstun/encap.o: nstun/encap.h nstun/net_defs.h logs.h
 nstun/iface.o: nstun/iface.h logs.h macros.h nstun/net_defs.h nsjail.h
 nstun/iface.o: config.pb.h nstun/nstun.h
-nstun/tun.o: nstun/tun.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/tun.o: nstun/icmp.h nstun/ip.h logs.h
-nstun/ip.o: nstun/ip.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/ip.o: nstun/icmp.h logs.h nstun/tcp.h nstun/udp.h
-nstun/icmp.o: nstun/icmp.h nstun/core.h nstun/net_defs.h nstun/nstun.h logs.h
-nstun/icmp.o: macros.h nstun/policy.h nstun/tun.h
-nstun/udp.o: nstun/udp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/udp.o: nstun/encap.h nstun/icmp.h logs.h macros.h nstun/policy.h
-nstun/udp.o: nstun/tun.h
-nstun/tcp.o: nstun/tcp.h nstun/core.h nstun/net_defs.h nstun/nstun.h
-nstun/tcp.o: nstun/encap.h logs.h macros.h nstun/policy.h nstun/tun.h util.h
-nstun/tcp.o: nsjail.h config.pb.h
+nstun/tun.o: nstun/tun.h nstun/core.h nstun/buffer_budget.h nstun/net_defs.h
+nstun/tun.o: nstun/nstun.h nstun/icmp.h nstun/ip.h logs.h
+nstun/ip.o: nstun/ip.h nstun/core.h nstun/buffer_budget.h nstun/net_defs.h
+nstun/ip.o: nstun/nstun.h nstun/icmp.h logs.h nstun/tcp.h nstun/udp.h
+nstun/icmp.o: nstun/icmp.h nstun/core.h nstun/buffer_budget.h
+nstun/icmp.o: nstun/net_defs.h nstun/nstun.h logs.h macros.h nstun/policy.h
+nstun/icmp.o: nstun/tun.h
+nstun/udp.o: nstun/udp.h nstun/core.h nstun/buffer_budget.h nstun/net_defs.h
+nstun/udp.o: nstun/nstun.h nstun/encap.h nstun/icmp.h logs.h macros.h
+nstun/udp.o: nstun/policy.h nstun/tun.h
+nstun/tcp.o: nstun/tcp.h nstun/core.h nstun/buffer_budget.h nstun/net_defs.h
+nstun/tcp.o: nstun/nstun.h nstun/encap.h logs.h macros.h nstun/policy.h
+nstun/tcp.o: nstun/tun.h util.h nsjail.h config.pb.h
 config.pb.o: config.pb.h
 unotify/unotify.pb.o: unotify/unotify.pb.h
