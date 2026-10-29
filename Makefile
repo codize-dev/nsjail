@@ -159,8 +159,14 @@ test-cmdline: $(BIN)
 	$(call run_test, ./nsjail --rlimit_cpu 1.5 --help > /dev/null, 255)
 	$(call run_test, ./nsjail --time_limit 0x10 --cgroup_mem_swap_max=-1 --user 1000:1000:1 --help > /dev/null, 0)
 
-.PHONY: test
-test: $(BIN) $(TEST_BINS) test-cmdline
+.PHONY: test test-newapi-recursive-readonly
+# Requires Linux >= 6.3 and mount privileges. Exit 77 is a capability skip.
+test-newapi-recursive-readonly: $(BIN)
+	@./tests/newapi_recursive_readonly.sh ./nsjail; ret=$$?; \
+	  if [ "$$ret" -eq 77 ]; then echo "SKIP: new mount API integration test"; \
+	  elif [ "$$ret" -ne 0 ]; then exit "$$ret"; fi
+
+test: $(BIN) $(TEST_BINS) test-cmdline test-newapi-recursive-readonly
 	$(call run_test, ./tests/nstun_buffer_budget_test, 0)
 	$(call run_test, ./tests/nstun_policy_test, 0)
 	$(call run_test, ./tests/nstun_ip_test, 0)
@@ -224,6 +230,13 @@ endif
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -m none:/tmp:tmpfs:ro --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -R /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -B /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test && rm -f /tmp/nsjail_test', 0)
+	# A mount point's configured source must win over whatever the host has at the
+	# destination -- both when that destination is already a mount point and when it
+	# is a plain directory -- and per-mount flags must reach the mount the jail sees.
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -R /etc:/tmp --user 99999 --group 99999 -- /bin/bash -c 'test -e /tmp/passwd || exit 77', 0)
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / -m none:/tmp:tmpfs -R /etc:/tmp/sub --user 99999 --group 99999 -- /bin/bash -c 'test -e /tmp/sub/passwd || exit 77', 0)
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --config tests/mnt_exec.cfg --user 99999 --group 99999 -- /bin/bash -c '/tmp/nx/true', 0)
+	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --config tests/mnt_noexec.cfg --user 99999 --group 99999 -- /bin/bash -c '/tmp/nx/true 2>/dev/null || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 || exit 77', 77)
 	$(call run_test, ./nsjail $(OLD_EF) -q -Mo --chroot / --user 99999 --group 99999 --rw -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 && exit 77', 77)
 	$(call run_test, rm -f /run/user/$(UID)/nsjail_test2, 0)
@@ -245,6 +258,13 @@ endif
 	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / -m none:/tmp:tmpfs:ro --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / -R /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test || exit 77', 77)
 	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / -B /tmp --user 99999 --group 99999 -- /bin/bash -c 'touch /tmp/nsjail_test && rm -f /tmp/nsjail_test', 0)
+	# A mount point's configured source must win over whatever the host has at the
+	# destination -- both when that destination is already a mount point and when it
+	# is a plain directory -- and per-mount flags must reach the mount the jail sees.
+	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / -R /etc:/tmp --user 99999 --group 99999 -- /bin/bash -c 'test -e /tmp/passwd || exit 77', 0)
+	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / -m none:/tmp:tmpfs -R /etc:/tmp/sub --user 99999 --group 99999 -- /bin/bash -c 'test -e /tmp/sub/passwd || exit 77', 0)
+	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --config tests/mnt_exec.cfg --user 99999 --group 99999 -- /bin/bash -c '/tmp/nx/true', 0)
+	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --config tests/mnt_noexec.cfg --user 99999 --group 99999 -- /bin/bash -c '/tmp/nx/true 2>/dev/null || exit 77', 77)
 	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / --user 99999 --group 99999 -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 || exit 77', 77)
 	$(call run_test, ./nsjail $(NEW_EF) -q -Mo --chroot / --user 99999 --group 99999 --rw -- /bin/bash -c 'touch /run/user/$(UID)/nsjail_test2 && exit 77', 77)
 	$(call run_test, rm -f /run/user/$(UID)/nsjail_test2, 0)
